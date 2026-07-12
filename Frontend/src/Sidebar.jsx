@@ -19,6 +19,21 @@ function Sidebar({ isOpen, onClose }) {
     const userRole = localStorage.getItem("userRole") || "Admin";
 
     return (
+        <aside className="sidebar">
+
+            {/* Branding */}
+            <div className="sidebar-brand">
+                <p className="sidebar-title">{orgName}</p>
+                <p className="brand-subtitle">Asset &amp; Resource Management</p>
+            </div>
+
+            {/* Nav */}
+            <nav className="sidebar-nav">
+                <p className="nav-label">Menu</p>
+
+                {NAV_ITEMS.map((item) => {
+                    if (item.to === "/organization-setup" && userRole === "Employee") return null;
+                    return (
         <>
             <div
                 className={`sidebar-overlay ${isOpen ? "sidebar-overlay--visible" : ""}`}
@@ -41,6 +56,20 @@ function Sidebar({ isOpen, onClose }) {
                             key={item.to}
                             to={item.to}
                             className={({ isActive }) => isActive ? "nav-item active" : "nav-item"}
+                        >
+                            {item.label}
+                        </NavLink>
+                    );
+                })}
+            </nav>
+
+            {/* Bottom */}
+            <div className="sidebar-bottom">
+                <div className="user-profile">
+                    <div className="user-avatar">{userName[0] || "A"}</div>
+                    <div className="user-info">
+                        <span className="user-name">{userName}</span>
+                        <span className="user-role">{userRole}</span>
                             onClick={onClose}
                         >
                             {item.label}
