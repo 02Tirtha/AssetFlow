@@ -60,6 +60,18 @@ app.post('/api/departments', async (req, res) => {
   }
 });
 
+app.put('/api/departments/:id', async (req, res) => {
+  try {
+    const department = await prisma.department.update({
+      where: { id: parseInt(req.params.id) },
+      data: req.body
+    });
+    res.json(department);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get('/api/categories', async (req, res) => {
   try {
     const categories = await prisma.category.findMany();
@@ -78,12 +90,36 @@ app.post('/api/categories', async (req, res) => {
   }
 });
 
+app.put('/api/categories/:id', async (req, res) => {
+  try {
+    const category = await prisma.category.update({
+      where: { id: parseInt(req.params.id) },
+      data: req.body
+    });
+    res.json(category);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get('/api/employees', async (req, res) => {
   try {
     const employees = await prisma.employee.findMany();
     // exclude passwords
     const safeEmployees = employees.map(({ password, ...rest }) => rest);
     res.json(safeEmployees);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/employees/:id', async (req, res) => {
+  try {
+    const employee = await prisma.employee.update({
+      where: { id: parseInt(req.params.id) },
+      data: req.body
+    });
+    res.json(employee);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -115,7 +151,12 @@ app.post('/api/assets', async (req, res) => {
 // ==========================================
 app.get('/api/allocations', async (req, res) => {
   try {
-    const allocations = await prisma.allocation.findMany();
+    const { user, role } = req.query;
+    let whereClause = {};
+    if (role !== "Admin" && user) {
+      whereClause.assignedTo = user;
+    }
+    const allocations = await prisma.allocation.findMany({ where: whereClause });
     res.json(allocations);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -154,7 +195,17 @@ app.post('/api/allocations', async (req, res) => {
 
 app.get('/api/transfers', async (req, res) => {
   try {
-    const transfers = await prisma.transfer.findMany();
+    const { user, role } = req.query;
+    let whereClause = {};
+    if (role !== "Admin" && user) {
+      whereClause = {
+        OR: [
+          { from: user },
+          { to: user }
+        ]
+      };
+    }
+    const transfers = await prisma.transfer.findMany({ where: whereClause });
     res.json(transfers);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -163,7 +214,36 @@ app.get('/api/transfers', async (req, res) => {
 
 app.post('/api/transfers', async (req, res) => {
   try {
-    const transfer = await prisma.transfer.create({ data: req.body });
+    const { to, toDept } = req.body;
+    
+    // Check if the user exists in the specified department
+    const employee = await prisma.employee.findFirst({
+      where: { name: to, dept: toDept }
+    });
+
+    if (!employee) {
+      return res.status(400).json({ error: `User '${to}' not found in department '${toDept}'` });
+    }
+
+    const transfer = await prisma.transfer.create({ data: {
+      asset: req.body.asset,
+      from: req.body.from,
+      to: req.body.to,
+      reason: req.body.reason,
+      status: req.body.status,
+      date: req.body.date
+    }});
+
+    // Create Notification for Admin
+    await prisma.notification.create({
+      data: {
+        message: `New transfer request for ${transfer.asset} to ${transfer.to}`,
+        time: new Date().toISOString(),
+        type: "alert",
+        targetUser: "Admin User" // Explicitly target admin or leave null if admins see all
+      }
+    });
+
     res.json(transfer);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -176,6 +256,32 @@ app.put('/api/transfers/:id', async (req, res) => {
       where: { id: parseInt(req.params.id) },
       data: req.body
     });
+
+    if (req.body.status === 'Approved') {
+      await prisma.allocation.updateMany({
+        where: { asset: transfer.asset, assignedTo: transfer.from, status: 'Active' },
+        data: { status: 'Returned' }
+      });
+      await prisma.allocation.create({
+        data: {
+          asset: transfer.asset,
+          assignedTo: transfer.to,
+          date: new Date().toISOString().split('T')[0],
+          status: 'Active',
+          notes: 'Transferred from ' + transfer.from
+        }
+      });
+      // Notify the receiving user
+      await prisma.notification.create({
+        data: {
+          message: `Transfer of ${transfer.asset} approved`,
+          time: new Date().toISOString(),
+          type: "system",
+          targetUser: transfer.to
+        }
+      });
+    }
+
     res.json(transfer);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -199,7 +305,12 @@ app.put('/api/allocations/:id', async (req, res) => {
 // ==========================================
 app.get('/api/bookings', async (req, res) => {
   try {
-    const bookings = await prisma.booking.findMany();
+    const { user, role } = req.query;
+    let whereClause = {};
+    if (role !== "Admin" && user) {
+      whereClause.user = user;
+    }
+    const bookings = await prisma.booking.findMany({ where: whereClause });
     res.json(bookings);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -209,6 +320,17 @@ app.get('/api/bookings', async (req, res) => {
 app.post('/api/bookings', async (req, res) => {
   try {
     const booking = await prisma.booking.create({ data: req.body });
+    
+    // Notify the user who booked
+    await prisma.notification.create({
+      data: {
+        message: `Booking confirmed for ${booking.resource}`,
+        time: new Date().toISOString(),
+        type: "system",
+        targetUser: booking.user
+      }
+    });
+
     res.json(booking);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -229,8 +351,25 @@ app.put('/api/bookings/:id', async (req, res) => {
 
 app.delete('/api/bookings/:id', async (req, res) => {
   try {
-    const booking = await prisma.booking.delete({
-      where: { id: parseInt(req.params.id) }
+    const bookingId = parseInt(req.params.id);
+    const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
+    
+    if (!booking) return res.status(404).json({ error: "Booking not found" });
+
+    // Parse startTime: Format expected "YYYY-MM-DD HH:mm"
+    const startTimeObj = new Date(booking.startTime);
+    if (!isNaN(startTimeObj.getTime())) {
+      const now = new Date();
+      const diffMs = startTimeObj.getTime() - now.getTime();
+      const diffHours = diffMs / (1000 * 60 * 60);
+
+      if (diffHours < 1 && diffHours >= 0) {
+        return res.status(400).json({ error: "Cannot cancel resource booking within 1 hour of the start time." });
+      }
+    }
+
+    await prisma.booking.delete({
+      where: { id: bookingId }
     });
     res.json({ message: "Booking deleted", booking });
   } catch (error) {
@@ -244,7 +383,12 @@ app.delete('/api/bookings/:id', async (req, res) => {
 // ==========================================
 app.get('/api/maintenance', async (req, res) => {
   try {
-    const requests = await prisma.maintenanceRequest.findMany();
+    const { user, role } = req.query;
+    let whereClause = {};
+    if (role !== "Admin" && user) {
+      whereClause.loggedBy = user;
+    }
+    const requests = await prisma.maintenanceRequest.findMany({ where: whereClause });
     res.json(requests);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -261,6 +405,18 @@ app.post('/api/maintenance', async (req, res) => {
 });
 
 
+
+app.put('/api/maintenance/:id', async (req, res) => {
+  try {
+    const request = await prisma.maintenanceRequest.update({
+      where: { id: parseInt(req.params.id) },
+      data: req.body
+    });
+    res.json(request);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // ==========================================
 // AUDITS
@@ -283,6 +439,18 @@ app.post('/api/audits', async (req, res) => {
   }
 });
 
+app.put('/api/audits/:id', async (req, res) => {
+  try {
+    const cycle = await prisma.auditCycle.update({
+      where: { id: parseInt(req.params.id) },
+      data: req.body
+    });
+    res.json(cycle);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get('/api/discrepancies', async (req, res) => {
   try {
     const discrepancies = await prisma.discrepancy.findMany();
@@ -297,7 +465,17 @@ app.get('/api/discrepancies', async (req, res) => {
 // ==========================================
 app.get('/api/notifications', async (req, res) => {
   try {
-    const notifications = await prisma.notification.findMany();
+    const { user, role } = req.query;
+    
+    let whereClause = {};
+    if (role !== "Admin" && user) {
+      whereClause.targetUser = user;
+    }
+
+    const notifications = await prisma.notification.findMany({
+      where: whereClause,
+      orderBy: { id: 'desc' }
+    });
     res.json(notifications);
   } catch (error) {
     res.status(500).json({ error: error.message });
